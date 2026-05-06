@@ -147,23 +147,15 @@ class ThreadsClient:
 
     async def create_post(self, text: str) -> bool:
         await self.page.goto(BASE + "/", wait_until="load", timeout=30000)
-        await asyncio.sleep(2)
+        await asyncio.sleep(4)
 
         try:
-            new_post = await self.page.query_selector('[aria-label="New thread"]')
-            if new_post:
-                await new_post.click()
-            else:
-                placeholder = await self.page.query_selector('[placeholder]')
-                if placeholder:
-                    await placeholder.click()
+            # Click "What's new?" area to open composer
+            whats_new = self.page.get_by_text("What's new?")
+            await whats_new.click()
+            await asyncio.sleep(2)
 
-            await asyncio.sleep(1.5)
-
-            editor = await self.page.query_selector('[contenteditable="true"][role="textbox"]')
-            if not editor:
-                editor = await self.page.query_selector('[contenteditable="true"]')
-
+            editor = await self.page.query_selector('[contenteditable="true"]')
             if not editor:
                 log.error("Post editor not found")
                 return False
@@ -172,8 +164,10 @@ class ThreadsClient:
             await editor.type(text, delay=30)
             await asyncio.sleep(1)
 
-            await self.page.get_by_role("button", name="Post").click()
-            await asyncio.sleep(2)
+            # Click Post button
+            post_btn = self.page.get_by_role("button", name="Post", exact=True)
+            await post_btn.click()
+            await asyncio.sleep(3)
 
             log.info(f"Post created: {text[:60]}...")
             return True

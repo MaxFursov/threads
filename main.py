@@ -1,11 +1,10 @@
 import asyncio
 import os
-import random
 import logging
+from datetime import datetime
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from threads_client import ThreadsClient
-from ai_handler import AIHandler
+from analyze_trends import collect_trending_posts, analyze_and_draft
 from database import Database
 
 load_dotenv()
@@ -17,96 +16,58 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-KEYWORDS = [
-    "ковбаса",
-    "сосиски",
-    "ковбасні вироби",
-    "делікатеси",
-    "шашлик",
-    "м'ясо купити",
-    "сардельки",
-]
-
-MAX_REPLIES = int(os.getenv("MAX_REPLIES_PER_RUN", "15"))
+DRAFTS_FILE = "drafts.log"
 
 
-async def run_bot():
-    log.info("=== Bot run started ===")
-
-    client = ThreadsClient(
-        session_id=os.environ["THREADS_SESSION_ID"],
-        ds_user_id=os.environ["THREADS_DS_USER_ID"],
-        csrf_token=os.environ["THREADS_CSRF_TOKEN"],
-    )
-    ai = AIHandler(api_key=os.environ["ANTHROPIC_API_KEY"])
+async def daily_draft():
+    """Collect trending posts, analyze, save draft. No publishing."""
+    log.info("=== Daily draft run ===")
     db = Database()
 
-    await client.start()
-    replies_sent = 0
+    if db.posted_today():
+        log.info("Draft already generated today, skipping.")
+        db.close()
+        return
 
     try:
-        for keyword in KEYWORDS:
-            if replies_sent >= MAX_REPLIES:
-                break
+        posts = await collect_trending_posts(limit=30)
+        if not posts:
+            log.warning("No trending posts collected.")
+            return
 
-            posts = await client.search_posts(keyword)
+        log.info(f"Collected {len(posts)} posts. Analyzing...")
+        result = analyze_and_draft(posts)
 
-            for post in posts:
-                if replies_sent >= MAX_REPLIES:
-                    break
+        # Save draft to file
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        with open(DRAFTS_FILE, "a", encoding="utf-8") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"DATE: {timestamp}\n")
+            f.write(f"{'='*60}\n")
+            f.write(result)
+            f.write("\n")
 
-                post_id = post["id"]
-                if db.already_processed(post_id):
-                    continue
-
-                text = post.get("text", "")
-                if not text:
-                    db.mark_skipped(post_id)
-                    continue
-
-                log.info(f"[{post_id}] {text[:80]}")
-
-                reply = ai.generate_reply(text)
-                if not reply:
-                    db.mark_skipped(post_id)
-                    continue
-
-                log.info(f"Reply: {reply}")
-
-                success = await client.reply_to_post(post["url"], reply)
-                if success:
-                    db.mark_replied(post_id)
-                    replies_sent += 1
-                    delay = random.randint(45, 120)
-                    log.info(f"Waiting {delay}s before next reply...")
-                    await asyncio.sleep(delay)
-                else:
-                    db.mark_skipped(post_id)
-
-        log.info(f"Replies sent: {replies_sent}")
-
-        if not db.posted_today():
-            log.info("Creating daily post...")
-            post_text = ai.generate_daily_post()
-            success = await client.create_post(post_text)
-            if success:
-                db.mark_daily_post()
+        db.mark_daily_post()
+        log.info(f"Draft saved to {DRAFTS_FILE}")
+        print("\n" + "="*60)
+        print(result)
+        print("="*60 + "\n")
 
     finally:
-        await client.stop()
         db.close()
 
-    log.info("=== Bot run finished ===")
+    log.info("=== Done ===")
 
 
 def main():
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(run_bot, "interval", minutes=20, id="bot_run")
+    # Run once per day at 09:00
+    scheduler.add_job(daily_draft, "cron", hour=9, minute=0, id="daily_draft")
     scheduler.start()
-    log.info("Scheduler started. Bot runs every 20 minutes.")
+    log.info("Scheduler started. Daily draft runs at 09:00.")
 
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(run_bot())  # run immediately on start
+    loop.run_until_complete(daily_draft())  # run immediately on start
     loop.run_forever()
 
 
