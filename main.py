@@ -64,7 +64,7 @@ async def daily_post():
     log.info("=== Done ===")
 
 
-def main():
+async def main():
     scheduler = AsyncIOScheduler(
         executors={"default": AsyncIOExecutor()},
         timezone="Europe/Kyiv",
@@ -73,9 +73,10 @@ def main():
     scheduler.start()
     log.info("Scheduler started. Posts daily at 09:00 Kyiv time.")
 
-    loop = asyncio.get_event_loop()
-    loop.run_forever()
+    # Keep running forever
+    while True:
+        await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
