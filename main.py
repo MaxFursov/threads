@@ -1,10 +1,11 @@
 import asyncio
 import os
 import logging
-from datetime import datetime
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.executors.asyncio import AsyncIOExecutor
 from analyze_trends import collect_trending_posts, analyze_and_draft
+from threads_client import ThreadsClient
 from database import Database
 
 load_dotenv()
@@ -16,16 +17,13 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-DRAFTS_FILE = "drafts.log"
 
-
-async def daily_draft():
-    """Collect trending posts, analyze, save draft. No publishing."""
-    log.info("=== Daily draft run ===")
+async def daily_post():
+    log.info("=== Daily post run ===")
     db = Database()
 
     if db.posted_today():
-        log.info("Draft already generated today, skipping.")
+        log.info("Already posted today, skipping.")
         db.close()
         return
 
@@ -35,23 +33,30 @@ async def daily_draft():
             log.warning("No trending posts collected.")
             return
 
-        log.info(f"Collected {len(posts)} posts. Analyzing...")
+        log.info(f"Collected {len(posts)} posts. Generating post...")
         result = analyze_and_draft(posts)
 
-        # Save draft to file
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        with open(DRAFTS_FILE, "a", encoding="utf-8") as f:
-            f.write(f"\n{'='*60}\n")
-            f.write(f"DATE: {timestamp}\n")
-            f.write(f"{'='*60}\n")
-            f.write(result)
-            f.write("\n")
+        # Extract only the post text
+        post_text = result
+        if "ПОСТ:" in result:
+            post_text = result.split("ПОСТ:")[-1].strip()
 
-        db.mark_daily_post()
-        log.info(f"Draft saved to {DRAFTS_FILE}")
-        print("\n" + "="*60)
-        print(result)
-        print("="*60 + "\n")
+        log.info(f"Post text: {post_text}")
+
+        client = ThreadsClient(
+            session_id=os.environ["THREADS_SESSION_ID"],
+            ds_user_id=os.environ["THREADS_DS_USER_ID"],
+            csrf_token=os.environ["THREADS_CSRF_TOKEN"],
+        )
+        await client.start()
+        success = await client.create_post(post_text)
+        await client.stop()
+
+        if success:
+            db.mark_daily_post()
+            log.info("Post published successfully.")
+        else:
+            log.error("Failed to publish post.")
 
     finally:
         db.close()
@@ -60,14 +65,15 @@ async def daily_draft():
 
 
 def main():
-    scheduler = AsyncIOScheduler()
-    # Run once per day at 09:00
-    scheduler.add_job(daily_draft, "cron", hour=9, minute=0, id="daily_draft")
+    scheduler = AsyncIOScheduler(
+        executors={"default": AsyncIOExecutor()},
+        timezone="Europe/Kyiv",
+    )
+    scheduler.add_job(daily_post, "cron", hour=9, minute=0, id="daily_post")
     scheduler.start()
-    log.info("Scheduler started. Daily draft runs at 09:00.")
+    log.info("Scheduler started. Posts daily at 09:00 Kyiv time.")
 
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(daily_draft())  # run immediately on start
     loop.run_forever()
 
 
