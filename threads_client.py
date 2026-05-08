@@ -145,6 +145,57 @@ class ThreadsClient:
             log.error(f"Reply failed: {e}")
             return False
 
+    async def get_own_post_replies(self, username: str, limit: int = 10) -> list[dict]:
+        """Get recent replies/comments on the account's own posts."""
+        replies = []
+        captured = []
+
+        async def capture_response(response):
+            if "graphql" in response.url and response.status == 200:
+                try:
+                    body = await response.json()
+                    data = body.get("data") or {}
+                    # Profile thread replies come under various keys
+                    for key in ["mediaData", "data", "feedData"]:
+                        val = data.get(key)
+                        if val and isinstance(val, dict) and "edges" in val:
+                            captured.append(val)
+                except Exception:
+                    pass
+
+        self.page.on("response", capture_response)
+        await self.page.goto(f"{BASE}/@{username}", wait_until="load", timeout=30000)
+        await asyncio.sleep(4)
+        self.page.remove_listener("response", capture_response)
+
+        for feed in captured:
+            for edge in feed.get("edges", []):
+                node = edge.get("node", {})
+                thread = node.get("text_post_app_thread") or node.get("thread", {})
+                items = thread.get("thread_items", [])
+                if len(items) < 2:
+                    continue
+                # items[0] = original post, items[1+] = replies
+                original = items[0].get("post", {})
+                post_id = str(original.get("pk") or "")
+                post_code = original.get("code", "")
+                for item in items[1:]:
+                    reply = item.get("post", {})
+                    reply_id = str(reply.get("pk") or "")
+                    reply_text = (reply.get("caption") or {}).get("text", "")
+                    reply_user = (reply.get("user") or {}).get("username", "")
+                    if reply_id and reply_text and reply_user != username:
+                        replies.append({
+                            "id": reply_id,
+                            "text": reply_text,
+                            "username": reply_user,
+                            "post_url": f"{BASE}/t/{post_code}" if post_code else "",
+                        })
+                if len(replies) >= limit:
+                    break
+
+        return replies[:limit]
+
     async def create_post(self, text: str) -> bool:
         await self.page.goto(BASE + "/", wait_until="load", timeout=30000)
         await asyncio.sleep(4)
