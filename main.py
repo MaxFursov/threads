@@ -139,9 +139,9 @@ async def main():
     )
     scheduler.add_job(daily_post, "cron", hour=9, minute=0, id="daily_post")
     scheduler.add_job(comment_one_post, "interval", hours=2, id="comment")
-    scheduler.add_job(reply_to_own_comments, "interval", hours=2, minute=30, id="own_replies")
+    scheduler.add_job(reply_to_own_comments, "interval", minutes=30, id="own_replies")
     scheduler.start()
-    log.info("Scheduler started: daily post 09:00, comments every 2h, own replies every 2h.")
+    log.info("Scheduler started: daily post 09:00, comments every 2h, own replies every 30min.")
 
     while True:
         await asyncio.sleep(3600)
