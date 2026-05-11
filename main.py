@@ -82,8 +82,9 @@ async def reply_to_own_comments():
             if not response:
                 db.mark_skipped(r["id"])
                 continue
+            tagged = f"@{r['username']} {response}"
             log.info(f"Replying to @{r['username']}: {response}")
-            success = await client.reply_to_post(r["post_url"], response)
+            success = await client.reply_to_post(r["post_url"], tagged)
             if success:
                 db.mark_replied(r["id"])
             else:
