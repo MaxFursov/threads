@@ -114,10 +114,35 @@ class ThreadsClient:
         await asyncio.sleep(2)
 
         try:
-            # Click reply (speech bubble icon)
-            reply_btn = await self.page.query_selector('svg[aria-label="Reply"]')
-            if reply_btn:
-                await reply_btn.click()
+            # Find the Reply button for the specific post we navigated to.
+            # When viewing a reply URL, the page shows parent posts above — we must
+            # click the button whose container links to the exact target post, not
+            # the first button on the page (which belongs to the parent post).
+            target_path = post_url.replace("https://www.threads.com", "")
+            btn_idx = await self.page.evaluate(r"""
+(targetPath) => {
+    const btns = Array.from(document.querySelectorAll('svg[aria-label="Reply"]'));
+    for (let i = 0; i < btns.length; i++) {
+        let el = btns[i];
+        for (let d = 0; d < 20; d++) {
+            el = el.parentElement;
+            if (!el) break;
+            const postLinks = el.querySelectorAll('a[href*="/post/"]');
+            if (postLinks.length > 0) {
+                for (const a of postLinks) {
+                    if (a.getAttribute('href') === targetPath) return i;
+                }
+                break;
+            }
+        }
+    }
+    return 0;
+}
+""", target_path)
+
+            btns = await self.page.query_selector_all('svg[aria-label="Reply"]')
+            if btns:
+                await btns[btn_idx].click()
             else:
                 await self.page.get_by_role("button", name="Reply").first.click()
 
