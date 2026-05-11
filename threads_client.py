@@ -223,7 +223,7 @@ class ThreadsClient:
 """, list(own_usernames))
 
         log.info(f"Activity page: {len(items)} reply items found")
-        return items[:limit]
+        return items
 
     async def create_post(self, text: str) -> bool:
         await self.page.goto(BASE + "/", wait_until="load", timeout=30000)

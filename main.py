@@ -74,8 +74,11 @@ async def reply_to_own_comments():
     await client.start()
 
     try:
-        replies = await client.get_own_post_replies(OWN_USERNAME, limit=10)
+        replies = await client.get_own_post_replies(OWN_USERNAME)
+        replied_count = 0
         for r in replies:
+            if replied_count >= 5:
+                break
             if db.already_processed(r["id"]):
                 continue
             response = ai.generate_reply(r["text"])
@@ -86,6 +89,7 @@ async def reply_to_own_comments():
             success = await client.reply_to_post(r["post_url"], response)
             if success:
                 db.mark_replied(r["id"])
+                replied_count += 1
             else:
                 db.mark_skipped(r["id"])
     finally:
