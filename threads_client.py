@@ -146,55 +146,59 @@ class ThreadsClient:
             return False
 
     async def get_own_post_replies(self, username: str, limit: int = 10) -> list[dict]:
-        """Get recent replies/comments on the account's own posts."""
-        replies = []
-        captured = []
+        """Get recent activity (replies to our posts and comments) from the activity page."""
+        own_usernames = {username, "dilovakovbasa.official", "dilovakovbasa.ua"}
+        own_set_js = str(list(own_usernames))
 
-        async def capture_response(response):
-            if "graphql" in response.url and response.status == 200:
-                try:
-                    body = await response.json()
-                    data = body.get("data") or {}
-                    # Profile thread replies come under various keys
-                    for key in ["mediaData", "data", "feedData"]:
-                        val = data.get(key)
-                        if val and isinstance(val, dict) and "edges" in val:
-                            captured.append(val)
-                except Exception:
-                    pass
-
-        self.page.on("response", capture_response)
-        await self.page.goto(f"{BASE}/@{username}", wait_until="load", timeout=30000)
+        await self.page.goto(f"{BASE}/activity", wait_until="load", timeout=30000)
         await asyncio.sleep(4)
-        self.page.remove_listener("response", capture_response)
 
-        for feed in captured:
-            for edge in feed.get("edges", []):
-                node = edge.get("node", {})
-                thread = node.get("text_post_app_thread") or node.get("thread", {})
-                items = thread.get("thread_items", [])
-                if len(items) < 2:
-                    continue
-                # items[0] = original post, items[1+] = replies
-                original = items[0].get("post", {})
-                post_id = str(original.get("pk") or "")
-                post_code = original.get("code", "")
-                for item in items[1:]:
-                    reply = item.get("post", {})
-                    reply_id = str(reply.get("pk") or "")
-                    reply_text = (reply.get("caption") or {}).get("text", "")
-                    reply_user = (reply.get("user") or {}).get("username", "")
-                    if reply_id and reply_text and reply_user != username:
-                        replies.append({
-                            "id": reply_id,
-                            "text": reply_text,
-                            "username": reply_user,
-                            "post_url": f"{BASE}/t/{post_code}" if post_code else "",
-                        })
-                if len(replies) >= limit:
-                    break
+        items = await self.page.evaluate(r"""
+(ownList) => {
+    const results = [];
+    const seen = new Set();
+    const OWN = new Set(ownList);
 
-        return replies[:limit]
+    for (const link of document.querySelectorAll('a[href]')) {
+        const href = link.href;
+        const m = href.match(/threads\.com\/@([^/]+)\/post\/([A-Za-z0-9_-]+)\b/);
+        if (!m) continue;
+        const user = m[1];
+        const code = m[2];
+        if (OWN.has(user)) continue;
+        if (seen.has(code)) continue;
+        seen.add(code);
+
+        // Walk up while container has only 1 post link (individual notification item)
+        let el = link;
+        for (let i = 0; i < 12; i++) {
+            const parent = el.parentElement;
+            if (!parent) break;
+            if (parent.querySelectorAll('a[href*="/post/"]').length > 1) break;
+            el = parent;
+        }
+
+        const text = el.innerText.trim();
+        const lines = text.split('\n')
+            .map(l => l.trim())
+            .filter(l => l && l !== user && !l.match(/^\d+[smhdw]$/) && l.length > 2);
+        const cleanText = lines.join(' ').trim();
+
+        if (cleanText) {
+            results.push({
+                id: code,
+                username: user,
+                post_url: href,
+                text: cleanText.substring(0, 500)
+            });
+        }
+    }
+    return results;
+}
+""", list(own_usernames))
+
+        log.info(f"Activity page: {len(items)} reply items found")
+        return items[:limit]
 
     async def create_post(self, text: str) -> bool:
         await self.page.goto(BASE + "/", wait_until="load", timeout=30000)
