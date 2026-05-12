@@ -83,6 +83,7 @@ async def reply_to_own_comments():
                 continue
             response = ai.generate_reply(r["text"])
             if not response:
+                log.info(f"AI NULL for @{r['username']}: {r['text'][:120]}")
                 db.mark_skipped(r["id"])
                 continue
             log.info(f"Replying to @{r['username']}: {response}")
