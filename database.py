@@ -25,8 +25,12 @@ class Database:
         self.conn.commit()
 
     def already_processed(self, post_id: str) -> bool:
+        # Replied items are permanently skipped.
+        # Skipped items (reply failed or AI returned None) are retried after 6 hours.
         cur = self.conn.execute(
-            "SELECT 1 FROM processed_posts WHERE post_id = ?", (post_id,)
+            """SELECT 1 FROM processed_posts WHERE post_id = ?
+               AND (replied = 1 OR created_at > datetime('now', '-6 hours'))""",
+            (post_id,)
         )
         return cur.fetchone() is not None
 
