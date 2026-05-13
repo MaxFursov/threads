@@ -160,7 +160,7 @@ class ThreadsClient:
             await editor.type(reply_text, delay=40)
             await asyncio.sleep(1)
 
-            await self.page.get_by_role("button", name="Post").click()
+            await self.page.get_by_role("button", name="Post", exact=True).first.click()
             await asyncio.sleep(2)
 
             log.info(f"Replied to {post_url}")
@@ -245,7 +245,7 @@ class ThreadsClient:
             await asyncio.sleep(1)
 
             # Click Post button
-            post_btn = self.page.get_by_role("button", name="Post", exact=True)
+            post_btn = self.page.get_by_role("button", name="Post", exact=True).first
             await post_btn.click()
             await asyncio.sleep(3)
 
