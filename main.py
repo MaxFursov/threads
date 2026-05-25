@@ -81,7 +81,7 @@ async def reply_to_own_comments():
                 break
             if db.already_processed(r["id"]):
                 continue
-            response = ai.generate_reply(r["text"])
+            response = ai.generate_own_post_reply(r["text"], r["username"])
             if not response:
                 log.info(f"AI NULL for @{r['username']}: {r['text'][:120]}")
                 db.mark_skipped(r["id"])
@@ -119,22 +119,60 @@ async def daily_post():
         result = analyze_and_draft(posts)
         post_text = result.split("ПОСТ:")[-1].strip() if "ПОСТ:" in result else result
 
+        insight = db.get_insight()
+        recent_posts = db.get_recent_post_texts(days=14)
+        ai = AIHandler(api_key=os.environ["ANTHROPIC_API_KEY"])
+        post_text = ai.generate_daily_post(insight=insight, recent_posts=recent_posts)
+
         log.info(f"Post text: {post_text}")
 
         client = make_client()
         await client.start()
-        success = await client.create_post(post_text)
+        post_url = await client.create_post(post_text, OWN_USERNAME)
         await client.stop()
 
-        if success:
+        if post_url:
             db.mark_daily_post()
-            log.info("Post published.")
+            db.save_published_post(post_url, post_text)
+            log.info(f"Post published: {post_url}")
         else:
             log.error("Failed to publish post.")
     finally:
         db.close()
 
     log.info("=== Daily post done ===")
+
+
+async def collect_post_metrics():
+    """Every day at 22:00: collect metrics for unparsed posts, then run performance analysis."""
+    log.info("=== Collect post metrics ===")
+    db = Database()
+    posts_to_check = db.get_posts_needing_metrics()
+
+    if posts_to_check:
+        client = make_client()
+        await client.start()
+        try:
+            for p in posts_to_check:
+                metrics = await client.get_post_metrics(p["url"])
+                db.update_post_metrics(p["url"], metrics["likes"], metrics["comments"])
+                log.info(f"Metrics for {p['url']}: {metrics['likes']} likes, {metrics['comments']} comments")
+                await asyncio.sleep(3)
+        finally:
+            await client.stop()
+    else:
+        log.info("No posts need metrics update.")
+
+    all_posts = db.get_all_posts_with_metrics()
+    if len(all_posts) >= 3:
+        ai = AIHandler(api_key=os.environ["ANTHROPIC_API_KEY"])
+        insight = ai.analyze_post_performance(all_posts)
+        if insight:
+            db.save_insight(insight)
+            log.info(f"Performance insight saved: {insight[:120]}...")
+
+    db.close()
+    log.info("=== Collect post metrics done ===")
 
 
 async def main():
@@ -145,8 +183,9 @@ async def main():
     scheduler.add_job(daily_post, "cron", hour=9, minute=0, id="daily_post")
     scheduler.add_job(comment_one_post, "cron", hour="8,10,12,14,16,18,20", minute=0, id="comment")
     scheduler.add_job(reply_to_own_comments, "cron", hour="8-21", minute="0,30", id="own_replies")
+    scheduler.add_job(collect_post_metrics, "cron", hour=22, minute=0, id="metrics")
     scheduler.start()
-    log.info("Scheduler started: daily post 09:00, comments every 2h (8-22), own replies every 30min (8-22).")
+    log.info("Scheduler started: daily post 09:00, comments every 2h (8-20), own replies every 30min (8-21), metrics 22:00.")
 
     while True:
         await asyncio.sleep(3600)

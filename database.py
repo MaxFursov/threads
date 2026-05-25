@@ -21,6 +21,19 @@ class Database:
                 post_date TEXT PRIMARY KEY,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS published_posts (
+                post_url TEXT PRIMARY KEY,
+                post_text TEXT,
+                likes INTEGER DEFAULT NULL,
+                comments INTEGER DEFAULT NULL,
+                published_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                metrics_updated_at TEXT DEFAULT NULL
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
         """)
         self.conn.commit()
 
@@ -61,6 +74,67 @@ class Database:
             "INSERT OR REPLACE INTO daily_posts (post_date) VALUES (?)", (today,)
         )
         self.conn.commit()
+
+    def save_published_post(self, url: str, text: str):
+        self.conn.execute(
+            "INSERT OR IGNORE INTO published_posts (post_url, post_text) VALUES (?, ?)",
+            (url, text),
+        )
+        self.conn.commit()
+
+    def get_posts_needing_metrics(self, max_count: int = 20) -> list[dict]:
+        cur = self.conn.execute(
+            """SELECT post_url FROM published_posts
+               WHERE metrics_updated_at IS NULL
+               AND published_at > datetime('now', '-30 days')
+               ORDER BY published_at DESC LIMIT ?""",
+            (max_count,),
+        )
+        return [{"url": row[0]} for row in cur.fetchall()]
+
+    def update_post_metrics(self, url: str, likes: int, comments: int):
+        self.conn.execute(
+            """UPDATE published_posts
+               SET likes = ?, comments = ?, metrics_updated_at = CURRENT_TIMESTAMP
+               WHERE post_url = ?""",
+            (likes, comments, url),
+        )
+        self.conn.commit()
+
+    def get_all_posts_with_metrics(self) -> list[dict]:
+        cur = self.conn.execute(
+            """SELECT post_text, likes, comments FROM published_posts
+               WHERE likes IS NOT NULL
+               ORDER BY published_at DESC""",
+        )
+        return [
+            {"text": row[0], "likes": row[1], "comments": row[2]}
+            for row in cur.fetchall()
+        ]
+
+    def save_insight(self, insight: str):
+        self.conn.execute(
+            """INSERT OR REPLACE INTO settings (key, value, updated_at)
+               VALUES ('performance_insight', ?, CURRENT_TIMESTAMP)""",
+            (insight,),
+        )
+        self.conn.commit()
+
+    def get_recent_post_texts(self, days: int = 14) -> list[str]:
+        cur = self.conn.execute(
+            """SELECT post_text FROM published_posts
+               WHERE published_at > datetime('now', ? || ' days')
+               ORDER BY published_at DESC""",
+            (f"-{days}",),
+        )
+        return [row[0] for row in cur.fetchall() if row[0]]
+
+    def get_insight(self) -> str | None:
+        cur = self.conn.execute(
+            "SELECT value FROM settings WHERE key = 'performance_insight'"
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
 
     def close(self):
         self.conn.close()
