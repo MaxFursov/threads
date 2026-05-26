@@ -140,6 +140,21 @@ class Database:
         previous_names = {item["name"] for item in self.get_catalog_state(key)}
         return [item for item in current if item["name"] not in previous_names]
 
+    def get_recently_mentioned(self, key: str) -> set[str]:
+        cur = self.conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (f"mentioned_{key}",)
+        )
+        row = cur.fetchone()
+        return set(json.loads(row[0])) if row else set()
+
+    def save_recently_mentioned(self, key: str, names: list[str]):
+        self.conn.execute(
+            """INSERT OR REPLACE INTO settings (key, value, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)""",
+            (f"mentioned_{key}", json.dumps(names, ensure_ascii=False)),
+        )
+        self.conn.commit()
+
     def get_recent_post_texts(self, days: int = 14) -> list[str]:
         cur = self.conn.execute(
             """SELECT post_text FROM published_posts

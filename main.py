@@ -164,26 +164,28 @@ async def check_catalog_and_post():
         promotions = await fetch_promotions(client.page)
         new_products = await fetch_new_products(client.page)
 
-        new_promos = db.find_new_catalog_items("promotions", promotions)
-        new_items = db.find_new_catalog_items("new_products", new_products)
+        recently_mentioned_promos = db.get_recently_mentioned("promotions")
+        recently_mentioned_products = db.get_recently_mentioned("new_products")
 
-        if new_promos or new_items:
-            log.info(f"Catalog changes: {len(new_promos)} new promos, {len(new_items)} new products")
+        fresh_promos = [p for p in promotions if p["name"] not in recently_mentioned_promos]
+        fresh_products = [p for p in new_products if p["name"] not in recently_mentioned_products]
+
+        if fresh_promos or fresh_products:
+            log.info(f"Unmentioned: {len(fresh_promos)} promos, {len(fresh_products)} new products")
             ai = AIHandler(api_key=os.environ["ANTHROPIC_API_KEY"])
             post_text = ai.generate_catalog_post(
-                new_products=new_items if new_items else None,
-                promotions=new_promos if new_promos else None,
+                new_products=fresh_products[:3] if fresh_products else None,
+                promotions=fresh_promos[:4] if fresh_promos else None,
             )
             if post_text:
                 url = await client.create_post(post_text, OWN_USERNAME)
                 if url:
                     db.save_published_post(url, post_text)
+                    db.save_recently_mentioned("promotions", [p["name"] for p in fresh_promos[:4]])
+                    db.save_recently_mentioned("new_products", [p["name"] for p in fresh_products[:3]])
                     log.info(f"Catalog post published: {url}")
         else:
-            log.info("No catalog changes.")
-
-        db.save_catalog_state("promotions", promotions)
-        db.save_catalog_state("new_products", new_products)
+            log.info("All current promotions already mentioned recently, skipping.")
     finally:
         await client.stop()
         db.close()
