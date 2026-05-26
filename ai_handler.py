@@ -143,8 +143,13 @@ class AIHandler:
             log.error(f"AI analysis error: {e}")
             return None
 
-    def generate_daily_post(self, insight: str | None = None, recent_posts: list[str] | None = None) -> str:
-        parts = ["Напиши новий пост. Обери тему самостійно зі списку в інструкції, але НЕ повторюй теми нещодавніх постів."]
+    def generate_daily_post(self, insight: str | None = None, recent_posts: list[str] | None = None, trend_mechanism: str | None = None) -> str:
+        parts = ["Напиши новий пост про ковбасу або м'ясні вироби."]
+
+        if trend_mechanism:
+            parts.append(f"\nСьогодні в Threads популярний такий підхід: {trend_mechanism}\nВикористай саме цей механізм, але адаптуй до теми ковбаси.")
+        else:
+            parts.append("\nОбери тему самостійно зі списку в інструкції.")
 
         if recent_posts:
             recent_block = "\n".join(f'- «{t[:200]}»' for t in recent_posts[:7])

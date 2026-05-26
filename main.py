@@ -5,7 +5,7 @@ import logging
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.executors.asyncio import AsyncIOExecutor
-from analyze_trends import collect_trending_posts, analyze_and_draft
+from analyze_trends import collect_trending_posts, extract_trend_mechanism
 from threads_client import ThreadsClient
 from ai_handler import AIHandler
 from database import Database
@@ -112,17 +112,16 @@ async def daily_post():
 
     try:
         posts = await collect_trending_posts(limit=30)
-        if not posts:
-            log.warning("No trending posts collected.")
-            return
-
-        result = analyze_and_draft(posts)
-        post_text = result.split("ПОСТ:")[-1].strip() if "ПОСТ:" in result else result
+        trend_mechanism = extract_trend_mechanism(posts) if posts else None
+        if trend_mechanism:
+            log.info(f"Trend mechanism: {trend_mechanism}")
+        else:
+            log.warning("No trending posts or mechanism found, using default topic.")
 
         insight = db.get_insight()
         recent_posts = db.get_recent_post_texts(days=14)
         ai = AIHandler(api_key=os.environ["ANTHROPIC_API_KEY"])
-        post_text = ai.generate_daily_post(insight=insight, recent_posts=recent_posts)
+        post_text = ai.generate_daily_post(insight=insight, recent_posts=recent_posts, trend_mechanism=trend_mechanism)
 
         log.info(f"Post text: {post_text}")
 

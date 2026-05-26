@@ -114,42 +114,30 @@ async def collect_trending_posts(limit: int = 30) -> list[dict]:
     return posts
 
 
-def analyze_and_draft(posts: list[dict]) -> str:
-    """Send posts to Claude, analyze trends, generate a draft post."""
+def extract_trend_mechanism(posts: list[dict]) -> str | None:
+    """Analyze top trending posts and return the dominant psychological mechanism."""
+    if not posts:
+        return None
+
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
     posts_text = "\n\n".join(
         f"[Лайки: {p['likes']}, Відповіді: {p['replies']}, Репости: {p['reposts']}]\n{p['text']}"
-        for p in posts[:20]
+        for p in posts[:15]
     )
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=500,
+        max_tokens=200,
         messages=[{
             "role": "user",
-            "content": f"""Ось популярні пости з Threads (відсортовані за залученістю):
+            "content": f"""Ось популярні пости з Threads сьогодні:
 
 {posts_text}
 
-КРОК 1. Для кожного з топ-3 постів визнач одним реченням: який психологічний механізм робить його популярним (впізнаваність, провокація, несподіваний кут, гумор тощо).
+Визнач один психологічний механізм який найчастіше зустрічається в топових постах (впізнаваність, гумор, провокація, несподіваний кут, особиста історія тощо).
 
-КРОК 2. Обери один механізм і напиши пост про ковбасу або м'ясні продукти, використовуючи саме його.
-
-Контекст акаунту: Ділова Ковбаса - постачальник м'ясних виробів від українських виробників. Але пост не має звучати як реклама. Пиши як жива людина яка розбирається в темі.
-
-Правила:
-- 1-3 речення максимум
-- Без "В асортименті є", "у нас є", само-презентацій
-- Без посилань на сайт
-- Без емодзі
-- Тільки короткий дефіс (-), без довгого тире (—)
-- Без markdown
-- ЗАБОРОНЕНО починати речення з "Більшість людей"
-
-Формат відповіді:
-МЕХАНІЗМИ: [топ-3 аналіз]
-ПОСТ: [текст]"""
+Відповідай одним реченням: що саме робить ці пости популярними і як це виглядає структурно. Без заголовків, без markdown."""
         }],
     )
 
