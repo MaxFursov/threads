@@ -106,11 +106,21 @@ async def daily_post():
     db = Database()
 
     if db.posted_today():
-        log.info("Already posted today, skipping.")
+        log.info("Already posted today (db), skipping.")
         db.close()
         return
 
     try:
+        check_client = make_client()
+        await check_client.start()
+        already_posted = await check_client.posted_today_on_profile(OWN_USERNAME)
+        await check_client.stop()
+        if already_posted:
+            log.info("Already posted today (profile check), skipping.")
+            db.mark_daily_post()
+            db.close()
+            return
+
         posts = await collect_trending_posts(limit=30)
         trend_mechanism = extract_trend_mechanism(posts) if posts else None
         if trend_mechanism:

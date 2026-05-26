@@ -225,12 +225,35 @@ class ThreadsClient:
         log.info(f"Activity page: {len(items)} reply items found")
         return items
 
-    async def create_post(self, text: str) -> bool:
+    async def posted_today_on_profile(self, own_username: str) -> bool:
+        """Check the profile page to see if a post was published today."""
+        await self.page.goto(f"{BASE}/@{own_username}", wait_until="load", timeout=30000)
+        await asyncio.sleep(3)
+        # Threads shows relative timestamps like "1h", "2h", "30m" for recent posts
+        result = await self.page.evaluate(r"""
+() => {
+    for (const el of document.querySelectorAll('time, [datetime]')) {
+        const dt = el.getAttribute('datetime');
+        if (dt) {
+            const posted = new Date(dt);
+            const now = new Date();
+            const hoursAgo = (now - posted) / 3600000;
+            if (hoursAgo < 24) return true;
+        }
+    }
+    // fallback: look for relative time labels under 24h
+    const texts = document.body.innerText;
+    return /\b([1-9]|1\d|2[0-3])\s*[hгч]\b|\b[1-5]?\d\s*min\b|\b[1-5]?\d\s*хв\b|\b[1-5]?\d\s*m\b/.test(texts);
+}
+""")
+        return bool(result)
+
+    async def create_post(self, text: str, own_username: str = "dilovakovbasa") -> str | None:
+        """Publish a post and return its URL, or None on failure."""
         await self.page.goto(BASE + "/", wait_until="load", timeout=30000)
         await asyncio.sleep(4)
 
         try:
-            # Click "What's new?" area to open composer
             whats_new = self.page.get_by_text("What's new?")
             await whats_new.click()
             await asyncio.sleep(2)
@@ -238,20 +261,75 @@ class ThreadsClient:
             editor = await self.page.query_selector('[contenteditable="true"]')
             if not editor:
                 log.error("Post editor not found")
-                return False
+                return None
 
             await editor.click()
             await editor.type(text, delay=30)
             await asyncio.sleep(1)
 
-            # Click Post button
             post_btn = self.page.get_by_role("button", name="Post", exact=True).first
             await post_btn.click()
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
 
             log.info(f"Post created: {text[:60]}...")
-            return True
+
+            # Navigate to own profile to grab the URL of the freshly published post
+            await self.page.goto(f"{BASE}/@{own_username}", wait_until="load", timeout=30000)
+            await asyncio.sleep(2)
+            link = await self.page.query_selector('a[href*="/post/"]')
+            if link:
+                href = await link.get_attribute("href")
+                return f"{BASE}{href}" if href and href.startswith("/") else href
+            return None
 
         except Exception as e:
             log.error(f"Post failed: {e}")
-            return False
+            return None
+
+    async def get_post_metrics(self, post_url: str) -> dict:
+        """Load a post page and return {likes, comments} extracted from GraphQL responses."""
+        metrics = {"likes": 0, "comments": 0}
+        captured: list[dict] = []
+
+        async def on_response(response):
+            if "graphql" in response.url and response.status == 200:
+                try:
+                    captured.append(await response.json())
+                except Exception:
+                    pass
+
+        self.page.on("response", on_response)
+        try:
+            await self.page.goto(post_url, wait_until="load", timeout=30000)
+            await asyncio.sleep(3)
+        finally:
+            self.page.remove_listener("response", on_response)
+
+        for data in captured:
+            found = _extract_metrics(data)
+            if found["likes"] or found["comments"]:
+                return found
+
+        return metrics
+
+
+def _extract_metrics(obj, depth: int = 0) -> dict:
+    empty = {"likes": 0, "comments": 0}
+    if depth > 12:
+        return empty
+    if isinstance(obj, dict):
+        if "like_count" in obj:
+            return {
+                "likes": int(obj.get("like_count") or 0),
+                "comments": int(obj.get("reply_count") or obj.get("text_post_app_reply_count") or 0),
+            }
+        for v in obj.values():
+            r = _extract_metrics(v, depth + 1)
+            if r["likes"] or r["comments"]:
+                return r
+    elif isinstance(obj, list):
+        for item in obj:
+            r = _extract_metrics(item, depth + 1)
+            if r["likes"] or r["comments"]:
+                return r
+    return empty
