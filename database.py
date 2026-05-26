@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from datetime import date
 import logging
 
@@ -119,6 +120,25 @@ class Database:
             (insight,),
         )
         self.conn.commit()
+
+    def get_catalog_state(self, key: str) -> list[dict]:
+        cur = self.conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (f"catalog_{key}",)
+        )
+        row = cur.fetchone()
+        return json.loads(row[0]) if row else []
+
+    def save_catalog_state(self, key: str, items: list[dict]):
+        self.conn.execute(
+            """INSERT OR REPLACE INTO settings (key, value, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)""",
+            (f"catalog_{key}", json.dumps(items, ensure_ascii=False)),
+        )
+        self.conn.commit()
+
+    def find_new_catalog_items(self, key: str, current: list[dict]) -> list[dict]:
+        previous_names = {item["name"] for item in self.get_catalog_state(key)}
+        return [item for item in current if item["name"] not in previous_names]
 
     def get_recent_post_texts(self, days: int = 14) -> list[str]:
         cur = self.conn.execute(

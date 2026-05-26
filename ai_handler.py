@@ -126,6 +126,48 @@ class AIHandler:
             log.error(f"AI own-post reply error: {e}")
             return None
 
+    def generate_catalog_post(self, new_products: list[dict] | None, promotions: list[dict] | None) -> str | None:
+        parts = []
+        if new_products:
+            lines = ", ".join(f'"{p["name"]}"' for p in new_products[:5])
+            parts.append(f"Нові позиції на сайті: {lines}.")
+        if promotions:
+            promo_lines = []
+            for p in promotions[:4]:
+                if p.get("old_price") and p["price"]:
+                    discount = round((1 - p["price"] / p["old_price"]) * 100)
+                    promo_lines.append(f'"{p["name"]}" — знижка {discount}%, {p["price"]} грн/кг')
+                else:
+                    promo_lines.append(f'"{p["name"]}"')
+            parts.append("Акції: " + "; ".join(promo_lines) + ".")
+
+        if not parts:
+            return None
+
+        content = " ".join(parts) + " Сайт: dilovakovbasa.ua"
+        system = """Ти ведеш Threads-сторінку "Ділова Ковбаса". Тобі дають список нових товарів або акцій з сайту.
+Напиши короткий живий пост: що з'явилося або що зараз зі знижкою, і запрошуй на сайт.
+
+ПРАВИЛА:
+- 2-3 речення, живий тон
+- Без корпоративщини, без "шановні клієнти"
+- ЗАБОРОНЕНО символ "—" (довге тире)
+- Без хештегів, без емодзі
+- Мова: тільки українська
+- В кінці: dilovakovbasa.ua"""
+
+        try:
+            msg = self.client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=200,
+                system=system,
+                messages=[{"role": "user", "content": content}],
+            )
+            return msg.content[0].text.strip()
+        except Exception as e:
+            log.error(f"AI catalog post error: {e}")
+            return None
+
     def analyze_post_performance(self, posts: list[dict]) -> str | None:
         lines = []
         for p in posts:

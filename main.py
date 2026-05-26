@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.executors.asyncio import AsyncIOExecutor
 from analyze_trends import collect_trending_posts, extract_trend_mechanism
+from catalog_fetcher import fetch_promotions, fetch_new_products
 from threads_client import ThreadsClient
 from ai_handler import AIHandler
 from database import Database
@@ -152,6 +153,44 @@ async def daily_post():
     log.info("=== Daily post done ===")
 
 
+async def check_catalog_and_post():
+    """Daily at 11:00: check site for new promotions/products and post if anything changed."""
+    log.info("=== Catalog check ===")
+    db = Database()
+    client = make_client()
+    await client.start()
+
+    try:
+        promotions = await fetch_promotions(client.page)
+        new_products = await fetch_new_products(client.page)
+
+        new_promos = db.find_new_catalog_items("promotions", promotions)
+        new_items = db.find_new_catalog_items("new_products", new_products)
+
+        if new_promos or new_items:
+            log.info(f"Catalog changes: {len(new_promos)} new promos, {len(new_items)} new products")
+            ai = AIHandler(api_key=os.environ["ANTHROPIC_API_KEY"])
+            post_text = ai.generate_catalog_post(
+                new_products=new_items if new_items else None,
+                promotions=new_promos if new_promos else None,
+            )
+            if post_text:
+                url = await client.create_post(post_text, OWN_USERNAME)
+                if url:
+                    db.save_published_post(url, post_text)
+                    log.info(f"Catalog post published: {url}")
+        else:
+            log.info("No catalog changes.")
+
+        db.save_catalog_state("promotions", promotions)
+        db.save_catalog_state("new_products", new_products)
+    finally:
+        await client.stop()
+        db.close()
+
+    log.info("=== Catalog check done ===")
+
+
 async def collect_post_metrics():
     """Every day at 22:00: collect metrics for unparsed posts, then run performance analysis."""
     log.info("=== Collect post metrics ===")
@@ -190,6 +229,7 @@ async def main():
         timezone="Europe/Kyiv",
     )
     scheduler.add_job(daily_post, "cron", hour=9, minute=0, id="daily_post")
+    scheduler.add_job(check_catalog_and_post, "cron", hour=11, minute=0, id="catalog")
     scheduler.add_job(comment_one_post, "cron", hour="8,10,12,14,16,18,20", minute=0, id="comment")
     scheduler.add_job(reply_to_own_comments, "cron", hour="8-21", minute="0,30", id="own_replies")
     scheduler.add_job(collect_post_metrics, "cron", hour=22, minute=0, id="metrics")
