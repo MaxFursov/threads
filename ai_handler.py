@@ -103,7 +103,9 @@ class AIHandler:
                 messages=[{"role": "user", "content": f"Пост: {post_text}"}],
             )
             response = msg.content[0].text.strip()
-            return None if response == "NULL" or not response else response
+            if response == "NULL" or not response:
+                return None
+            return AIHandler._strip_emdash(response)
         except Exception as e:
             log.error(f"AI reply error: {e}")
             return None
@@ -121,7 +123,9 @@ class AIHandler:
                 messages=[{"role": "user", "content": content}],
             )
             response = msg.content[0].text.strip()
-            return None if response == "NULL" or not response else response
+            if response == "NULL" or not response:
+                return None
+            return AIHandler._strip_emdash(response)
         except Exception as e:
             log.error(f"AI own-post reply error: {e}")
             return None
@@ -163,7 +167,7 @@ class AIHandler:
                 system=system,
                 messages=[{"role": "user", "content": content}],
             )
-            return msg.content[0].text.strip()
+            return self._strip_emdash(msg.content[0].text.strip())
         except Exception as e:
             log.error(f"AI catalog post error: {e}")
             return None
@@ -185,11 +189,24 @@ class AIHandler:
             log.error(f"AI analysis error: {e}")
             return None
 
+    @staticmethod
+    def _strip_emdash(text: str) -> str:
+        import re
+        # Replace em-dash with comma (with spacing cleanup)
+        text = re.sub(r"\s*—\s*", ", ", text)
+        text = re.sub(r",\s*,", ",", text)
+        return text.strip(", ")
+
     def generate_daily_post(self, insight: str | None = None, recent_posts: list[str] | None = None, trend_mechanism: str | None = None) -> str:
-        parts = ["Напиши новий пост про ковбасу або м'ясні вироби."]
+        parts = ["Напиши новий пост про ковбасу або м'ясні вироби для звичайних людей."]
 
         if trend_mechanism:
-            parts.append(f"\nСьогодні в Threads популярний такий підхід: {trend_mechanism}\nВикористай саме цей механізм, але адаптуй до теми ковбаси.")
+            clean_mechanism = self._strip_emdash(trend_mechanism)
+            parts.append(
+                f"\nПопулярний підхід сьогодні: {clean_mechanism}\n"
+                "Використай цей підхід, але виключно з точки зору СПОЖИВАЧА (людина купує або їсть ковбасу). "
+                "Не адаптуй до бізнесу, торгівлі або роботи магазину."
+            )
         else:
             parts.append("\nОбери тему самостійно зі списку в інструкції.")
 
@@ -206,10 +223,11 @@ class AIHandler:
             msg = self.client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=200,
-                system=DAILY_POST_SYSTEM + "\n\nВАЖЛИВО: повертай ТІЛЬКИ текст посту — без заголовків, без варіантів, без markdown, без зірочок. Один готовий пост.",
+                system=DAILY_POST_SYSTEM + "\n\nВАЖЛИВО: повертай ТІЛЬКИ текст посту. Без заголовків, без варіантів, без markdown. Символ — (довге тире) ЗАБОРОНЕНИЙ — замінюй на кому або крапку.",
                 messages=[{"role": "user", "content": content}],
             )
-            return msg.content[0].text.strip()
+            result = msg.content[0].text.strip()
+            return self._strip_emdash(result)
         except Exception as e:
             log.error(f"AI daily post error: {e}")
-            return "Ділова Ковбаса — 950+ м'ясних виробів від українських виробників. Доставка по всій Україні. https://www.dilovakovbasa.ua"
+            return "Ділова Ковбаса: 950+ м'ясних виробів від українських виробників. Доставка по всій Україні. https://www.dilovakovbasa.ua"
