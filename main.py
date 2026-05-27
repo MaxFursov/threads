@@ -21,7 +21,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 KEYWORDS = ["ковбаса", "шашлик", "сосиски", "м'ясо", "делікатеси"]
-OWN_USERNAME = os.getenv("THREADS_USERNAME", "dilovakovbasa")
+OWN_USERNAME = os.getenv("THREADS_USERNAME", "dilovakovbasa.official")
 
 
 def make_client():
