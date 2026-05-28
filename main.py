@@ -37,12 +37,15 @@ async def comment_one_post():
     log.info("=== Comment run ===")
     db = Database()
     ai = AIHandler(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+    posts = await collect_trending_posts(limit=40)
+    random.shuffle(posts)
+    log.info(f"Feed posts available: {len(posts)}")
+
     client = make_client()
     await client.start()
 
     try:
-        posts = await collect_trending_posts(limit=40)
-        random.shuffle(posts)
         for post in posts:
             post_id = post.get("id") or str(hash(post["text"][:80]))
             if db.already_processed(post_id) or not post.get("url"):
@@ -100,16 +103,14 @@ async def reply_to_own_comments():
     log.info("=== Reply to own comments done ===")
 
 
-async def _publish_consumer_post(db: Database, client, ai: AIHandler):
-    """Generate and publish a consumer-focused trend post."""
-    posts = await collect_trending_posts(limit=30)
-    trend_mechanism = extract_trend_mechanism(posts) if posts else None
+async def _publish_consumer_post(db: Database, ai: AIHandler, trend_posts: list):
+    """Generate a consumer-focused trend post."""
+    trend_mechanism = extract_trend_mechanism(trend_posts) if trend_posts else None
     if trend_mechanism:
         log.info(f"Trend mechanism: {trend_mechanism}")
     insight = db.get_insight()
     recent_posts = db.get_recent_post_texts(days=14)
-    post_text = ai.generate_daily_post(insight=insight, recent_posts=recent_posts, trend_mechanism=trend_mechanism)
-    return post_text
+    return ai.generate_daily_post(insight=insight, recent_posts=recent_posts, trend_mechanism=trend_mechanism)
 
 
 async def _publish_catalog_post(db: Database, client, ai: AIHandler):
@@ -125,7 +126,7 @@ async def _publish_catalog_post(db: Database, client, ai: AIHandler):
 
     if not fresh_promos and not fresh_products:
         log.info("All promotions recently mentioned, falling back to consumer post.")
-        return await _publish_consumer_post(db, client, ai)
+        return await _publish_consumer_post(db, ai, [])
 
     post_text = ai.generate_catalog_post(
         new_products=fresh_products[:3] if fresh_products else None,
@@ -148,6 +149,8 @@ async def daily_post():
         return
 
     try:
+        trend_posts = await collect_trending_posts(limit=30)
+
         client = make_client()
         await client.start()
         already_posted = await client.posted_today_on_profile(OWN_USERNAME)
@@ -160,14 +163,13 @@ async def daily_post():
 
         from datetime import date
         use_catalog = date.today().toordinal() % 2 == 0
-        post_type = "catalog" if use_catalog else "consumer"
-        log.info(f"Post type today: {post_type}")
+        log.info(f"Post type today: {'catalog' if use_catalog else 'consumer'}")
 
         ai = AIHandler(api_key=os.environ["ANTHROPIC_API_KEY"])
         if use_catalog:
             post_text = await _publish_catalog_post(db, client, ai)
         else:
-            post_text = await _publish_consumer_post(db, client, ai)
+            post_text = await _publish_consumer_post(db, ai, trend_posts)
 
         log.info(f"Post text: {post_text}")
         post_url = await client.create_post(post_text, OWN_USERNAME)
