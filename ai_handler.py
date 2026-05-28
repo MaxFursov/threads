@@ -189,23 +189,33 @@ class AIHandler:
             log.error(f"AI analysis error: {e}")
             return None
 
+    _B2B_KEYWORDS = [
+        "бізнес", "підприємц", "клієнт", "постачальник", "постачання",
+        "рахунок", "накладна", "менеджер", "рекламац", "асортимент",
+        "закупівл", "обіг", "торгів", "магазин", "полиц", "склад",
+        "дистриб", "оптов", "роздріб", "виробник", "постачальн",
+    ]
+
     @staticmethod
     def _strip_emdash(text: str) -> str:
         import re
-        # Replace em-dash with comma (with spacing cleanup)
         text = re.sub(r"\s*—\s*", ", ", text)
         text = re.sub(r",\s*,", ",", text)
         return text.strip(", ")
 
+    @classmethod
+    def _is_b2b_mechanism(cls, mechanism: str) -> bool:
+        low = mechanism.lower()
+        return sum(1 for kw in cls._B2B_KEYWORDS if kw in low) >= 2
+
     def generate_daily_post(self, insight: str | None = None, recent_posts: list[str] | None = None, trend_mechanism: str | None = None) -> str:
         parts = ["Напиши новий пост про ковбасу або м'ясні вироби для звичайних людей."]
 
-        if trend_mechanism:
+        if trend_mechanism and not self._is_b2b_mechanism(trend_mechanism):
             clean_mechanism = self._strip_emdash(trend_mechanism)
             parts.append(
                 f"\nПопулярний підхід сьогодні: {clean_mechanism}\n"
-                "Використай цей підхід, але виключно з точки зору СПОЖИВАЧА (людина купує або їсть ковбасу). "
-                "Не адаптуй до бізнесу, торгівлі або роботи магазину."
+                "Використай цей підхід з точки зору СПОЖИВАЧА (людина купує або їсть ковбасу)."
             )
         else:
             parts.append("\nОбери тему самостійно зі списку в інструкції.")
