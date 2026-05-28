@@ -100,8 +100,45 @@ async def reply_to_own_comments():
     log.info("=== Reply to own comments done ===")
 
 
+async def _publish_consumer_post(db: Database, client, ai: AIHandler):
+    """Generate and publish a consumer-focused trend post."""
+    posts = await collect_trending_posts(limit=30)
+    trend_mechanism = extract_trend_mechanism(posts) if posts else None
+    if trend_mechanism:
+        log.info(f"Trend mechanism: {trend_mechanism}")
+    insight = db.get_insight()
+    recent_posts = db.get_recent_post_texts(days=14)
+    post_text = ai.generate_daily_post(insight=insight, recent_posts=recent_posts, trend_mechanism=trend_mechanism)
+    return post_text
+
+
+async def _publish_catalog_post(db: Database, client, ai: AIHandler):
+    """Generate and publish a promotions/new products post from the site."""
+    promotions = await fetch_promotions(client.page)
+    new_products = await fetch_new_products(client.page)
+
+    recently_mentioned_promos = db.get_recently_mentioned("promotions")
+    recently_mentioned_products = db.get_recently_mentioned("new_products")
+
+    fresh_promos = [p for p in promotions if p["name"] not in recently_mentioned_promos]
+    fresh_products = [p for p in new_products if p["name"] not in recently_mentioned_products]
+
+    if not fresh_promos and not fresh_products:
+        log.info("All promotions recently mentioned, falling back to consumer post.")
+        return await _publish_consumer_post(db, client, ai)
+
+    post_text = ai.generate_catalog_post(
+        new_products=fresh_products[:3] if fresh_products else None,
+        promotions=fresh_promos[:4] if fresh_promos else None,
+    )
+    if post_text:
+        db.save_recently_mentioned("promotions", [p["name"] for p in fresh_promos[:4]])
+        db.save_recently_mentioned("new_products", [p["name"] for p in fresh_products[:3]])
+    return post_text
+
+
 async def daily_post():
-    """Every day at 09:00: analyze trends and publish a post."""
+    """Every day at 09:00: alternate between consumer post and catalog post."""
     log.info("=== Daily post run ===")
     db = Database()
 
@@ -111,32 +148,28 @@ async def daily_post():
         return
 
     try:
-        check_client = make_client()
-        await check_client.start()
-        already_posted = await check_client.posted_today_on_profile(OWN_USERNAME)
-        await check_client.stop()
+        client = make_client()
+        await client.start()
+        already_posted = await client.posted_today_on_profile(OWN_USERNAME)
         if already_posted:
             log.info("Already posted today (profile check), skipping.")
+            await client.stop()
             db.mark_daily_post()
             db.close()
             return
 
-        posts = await collect_trending_posts(limit=30)
-        trend_mechanism = extract_trend_mechanism(posts) if posts else None
-        if trend_mechanism:
-            log.info(f"Trend mechanism: {trend_mechanism}")
-        else:
-            log.warning("No trending posts or mechanism found, using default topic.")
+        from datetime import date
+        use_catalog = date.today().toordinal() % 2 == 0
+        post_type = "catalog" if use_catalog else "consumer"
+        log.info(f"Post type today: {post_type}")
 
-        insight = db.get_insight()
-        recent_posts = db.get_recent_post_texts(days=14)
         ai = AIHandler(api_key=os.environ["ANTHROPIC_API_KEY"])
-        post_text = ai.generate_daily_post(insight=insight, recent_posts=recent_posts, trend_mechanism=trend_mechanism)
+        if use_catalog:
+            post_text = await _publish_catalog_post(db, client, ai)
+        else:
+            post_text = await _publish_consumer_post(db, client, ai)
 
         log.info(f"Post text: {post_text}")
-
-        client = make_client()
-        await client.start()
         post_url = await client.create_post(post_text, OWN_USERNAME)
         await client.stop()
 
@@ -150,46 +183,6 @@ async def daily_post():
         db.close()
 
     log.info("=== Daily post done ===")
-
-
-async def check_catalog_and_post():
-    """Daily at 11:00: check site for new promotions/products and post if anything changed."""
-    log.info("=== Catalog check ===")
-    db = Database()
-    client = make_client()
-    await client.start()
-
-    try:
-        promotions = await fetch_promotions(client.page)
-        new_products = await fetch_new_products(client.page)
-
-        recently_mentioned_promos = db.get_recently_mentioned("promotions")
-        recently_mentioned_products = db.get_recently_mentioned("new_products")
-
-        fresh_promos = [p for p in promotions if p["name"] not in recently_mentioned_promos]
-        fresh_products = [p for p in new_products if p["name"] not in recently_mentioned_products]
-
-        if fresh_promos or fresh_products:
-            log.info(f"Unmentioned: {len(fresh_promos)} promos, {len(fresh_products)} new products")
-            ai = AIHandler(api_key=os.environ["ANTHROPIC_API_KEY"])
-            post_text = ai.generate_catalog_post(
-                new_products=fresh_products[:3] if fresh_products else None,
-                promotions=fresh_promos[:4] if fresh_promos else None,
-            )
-            if post_text:
-                url = await client.create_post(post_text, OWN_USERNAME)
-                if url:
-                    db.save_published_post(url, post_text)
-                    db.save_recently_mentioned("promotions", [p["name"] for p in fresh_promos[:4]])
-                    db.save_recently_mentioned("new_products", [p["name"] for p in fresh_products[:3]])
-                    log.info(f"Catalog post published: {url}")
-        else:
-            log.info("All current promotions already mentioned recently, skipping.")
-    finally:
-        await client.stop()
-        db.close()
-
-    log.info("=== Catalog check done ===")
 
 
 async def collect_post_metrics():
@@ -230,12 +223,11 @@ async def main():
         timezone="Europe/Kyiv",
     )
     scheduler.add_job(daily_post, "cron", hour=9, minute=0, id="daily_post")
-    scheduler.add_job(check_catalog_and_post, "cron", hour=11, minute=0, id="catalog")
     scheduler.add_job(comment_one_post, "cron", hour="8,10,12,14,16,18,20", minute=0, id="comment")
     scheduler.add_job(reply_to_own_comments, "cron", hour="8-21", minute="0,30", id="own_replies")
     scheduler.add_job(collect_post_metrics, "cron", hour=22, minute=0, id="metrics")
     scheduler.start()
-    log.info("Scheduler started: daily post 09:00, comments every 2h (8-20), own replies every 30min (8-21), metrics 22:00.")
+    log.info("Scheduler started: daily post 09:00 (alternating consumer/catalog), comments every 2h (8-20), own replies every 30min (8-21), metrics 22:00.")
 
     while True:
         await asyncio.sleep(3600)
