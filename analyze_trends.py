@@ -96,10 +96,14 @@ async def collect_trending_posts(limit: int = 30) -> list[dict]:
         reply_count = info.get("direct_reply_count", 0) or 0
         repost_count = info.get("repost_count", 0) or 0
         username = (post.get("user") or {}).get("username", "")
+        code = post.get("code", "")
+        post_id = str(post.get("pk") or "")
 
         posts.append({
+            "id": post_id,
             "text": text,
             "username": username,
+            "url": f"https://www.threads.com/t/{code}" if code else "",
             "likes": like_count,
             "replies": reply_count,
             "reposts": repost_count,

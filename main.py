@@ -33,7 +33,7 @@ def make_client():
 
 
 async def comment_one_post():
-    """Every 2 hours: find one relevant post and comment on it."""
+    """Every 2 hours: find one relevant post in For You feed and comment on it."""
     log.info("=== Comment run ===")
     db = Database()
     ai = AIHandler(api_key=os.environ["ANTHROPIC_API_KEY"])
@@ -41,24 +41,23 @@ async def comment_one_post():
     await client.start()
 
     try:
-        random.shuffle(KEYWORDS)
-        for keyword in KEYWORDS:
-            posts = await client.search_posts(keyword, limit=10)
-            for post in posts:
-                post_id = post["id"]
-                if db.already_processed(post_id) or not post.get("url"):
-                    continue
-                reply = ai.generate_reply(post["text"])
-                if not reply:
-                    db.mark_skipped(post_id)
-                    continue
-                log.info(f"Commenting on [{post_id}]: {reply}")
-                success = await client.reply_to_post(post["url"], reply)
-                if success:
-                    db.mark_replied(post_id)
-                else:
-                    db.mark_skipped(post_id)
-                return  # one comment per run
+        posts = await collect_trending_posts(limit=40)
+        random.shuffle(posts)
+        for post in posts:
+            post_id = post.get("id") or str(hash(post["text"][:80]))
+            if db.already_processed(post_id) or not post.get("url"):
+                continue
+            reply = ai.generate_reply(post["text"])
+            if not reply:
+                db.mark_skipped(post_id)
+                continue
+            log.info(f"Commenting on @{post.get('username')}: {reply}")
+            success = await client.reply_to_post(post["url"], reply)
+            if success:
+                db.mark_replied(post_id)
+            else:
+                db.mark_skipped(post_id)
+            return
     finally:
         await client.stop()
         db.close()
