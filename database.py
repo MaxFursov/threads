@@ -8,6 +8,9 @@ log = logging.getLogger(__name__)
 
 class Database:
     def __init__(self, db_path: str = "/app/data/bot.db"):
+        import os
+        if not os.path.exists(os.path.dirname(db_path)):
+            db_path = os.path.join(os.path.dirname(__file__), "bot.db")
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self._init_schema()
 
