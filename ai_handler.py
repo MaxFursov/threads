@@ -60,6 +60,17 @@ ANALYSIS_SYSTEM = """Ти аналітик контенту для Threads-ак�
 
 Відповідай тільки цим висновком. Без заголовків, без списків, без markdown."""
 
+FALLBACK_POST_SYSTEM = """Напиши короткий пост для Threads від імені звичайної людини яка любить ковбасу.
+
+- 1-2 речення плюс питання до читачів
+- Особистий тон, як у чаті з другом
+- Тема: смак, рецепт, спогад або смішна ситуація з ковбасою
+- Без реклами, без назв компаній, без бізнесу
+- Мова: тільки українська
+- Символ - ЗАБОРОНЕНИЙ
+
+Повертай ТІЛЬКИ текст посту."""
+
 DAILY_POST_SYSTEM = """Ти ведеш Threads-сторінку про м'ясні вироби. Пишеш як людина, яка любить і розуміється на ковбасі.
 
 Твої читачі: звичайні люди, які купують ковбасу в магазині. Пишеш для них, а не для продавців чи підприємців.
@@ -196,6 +207,22 @@ class AIHandler:
         "дистриб", "оптов", "роздріб", "виробник", "постачальн",
     ]
 
+    # Strong phrases that unambiguously signal B2B content in the generated post
+    _B2B_POST_SIGNALS = [
+        "наш клієнт", "наші клієнти", "нашого клієнта", "нашим клієнтам",
+        "ваш асортимент", "вашого асортименту", "вашому асортименті",
+        "ваш магазин", "вашого магазину", "вашому магазині",
+        "ваша точка", "вашої точки", "вашій точці",
+        "ваші клієнти", "ваших клієнтів",
+        "підприємц",
+    ]
+
+    # Words that individually are weak signals but together indicate B2B
+    _B2B_POST_WORDS = [
+        "асортимент", "закупівл", "постачальник", "постачання",
+        "дистриб", "оптов", "накладна", "рекламац",
+    ]
+
     @staticmethod
     def _strip_emdash(text: str) -> str:
         import re
@@ -207,6 +234,13 @@ class AIHandler:
     def _is_b2b_mechanism(cls, mechanism: str) -> bool:
         low = mechanism.lower()
         return sum(1 for kw in cls._B2B_KEYWORDS if kw in low) >= 2
+
+    @classmethod
+    def _is_b2b_post(cls, text: str) -> bool:
+        low = text.lower()
+        if any(sig in low for sig in cls._B2B_POST_SIGNALS):
+            return True
+        return sum(1 for w in cls._B2B_POST_WORDS if w in low) >= 2
 
     def generate_daily_post(self, insight: str | None = None, recent_posts: list[str] | None = None, trend_mechanism: str | None = None) -> str:
         parts = ["Напиши новий пост про ковбасу або м'ясні вироби для звичайних людей."]
@@ -236,8 +270,19 @@ class AIHandler:
                 system=DAILY_POST_SYSTEM + "\n\nВАЖЛИВО: повертай ТІЛЬКИ текст посту. Без заголовків, без варіантів, без markdown. Символ — (довге тире) ЗАБОРОНЕНИЙ — замінюй на кому або крапку.",
                 messages=[{"role": "user", "content": content}],
             )
-            result = msg.content[0].text.strip()
-            return self._strip_emdash(result)
+            result = self._strip_emdash(msg.content[0].text.strip())
+
+            if self._is_b2b_post(result):
+                log.warning(f"B2B post detected, regenerating with fallback: {result[:120]}")
+                msg2 = self.client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=150,
+                    system=FALLBACK_POST_SYSTEM,
+                    messages=[{"role": "user", "content": "Напиши пост."}],
+                )
+                result = self._strip_emdash(msg2.content[0].text.strip())
+
+            return result
         except Exception as e:
             log.error(f"AI daily post error: {e}")
             return "Ділова Ковбаса: 950+ м'ясних виробів від українських виробників. Доставка по всій Україні. https://www.dilovakovbasa.ua"
