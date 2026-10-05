@@ -4,3 +4,9 @@ __pycache__/
 *.pyc
 venv/
 .venv/
+
+# Logged-in Threads session cookies (equivalent to account access, NEVER commit)
+threads_session.json
+cookies.json
+threads_token.json
+.DS_Store

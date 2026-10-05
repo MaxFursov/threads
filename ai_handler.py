@@ -3,6 +3,63 @@ import logging
 
 log = logging.getLogger(__name__)
 
+
+class AIGenerationError(Exception):
+    """Raised when a POST could not be generated (e.g. Claude API is down or out of
+    credits). Lets daily_post notify the owner "no post" instead of silently
+    publishing a canned fallback. Reply generators keep returning None instead."""
+
+
+def format_activity_context(activities: list[dict]) -> str:
+    """Format recent bot actions into a compact string for injection into AI prompts."""
+    if not activities:
+        return ""
+    lines = ["ОСТАННІ ДІЇ БОТА (не повторюй ті самі теми, стиль, жарти):"]
+    for a in activities:
+        date = a["created_at"][:10]
+        if a["type"] == "post_published":
+            lines.append(f"[{date}] Пост: {a['summary']}")
+        elif a["type"] == "comment_on_feed":
+            lines.append(f"[{date}] Коментар на чужий пост: {a['summary']}")
+        elif a["type"] == "reply_to_comment":
+            lines.append(f"[{date}] Відповідь на коментар: {a['summary']}")
+    return "\n".join(lines)
+
+# Compact description of what the company sells now (assortment grew well beyond meat).
+# Kept short on purpose — injected into prompts so posts can naturally touch cheese/dairy.
+ASSORTMENT_SUMMARY = (
+    "Ділова Ковбаса це вже не лише ковбаса. Крім м'ясного (ковбаси, сосиски, шинка, "
+    "балик, бекон, делікатеси) є великий напрям сирів (тверді, вершкові, моцарела, "
+    "сулугуні, з пліснявою, плавлені) і молочки (молоко, вершки, масло, сметана, "
+    "кефір, йогурти, сирки), а також ікра та бакалія."
+)
+
+# Distilled from 2026 "how to go viral on Threads" guides (postmypost, contentstudio,
+# posteverywhere). What the algorithm actually rewards, encoded as writing rules.
+# Injected into every post generator so posts are built to earn COMMENTS (the signal
+# we can influence most), not just to exist.
+VIRAL_RULES = """ЯК ПИСАТИ ПОСТ, ЯКИЙ НАБИРАЄ ПЕРЕГЛЯДИ Й КОМЕНТАРІ (правила Threads 2026):
+
+ПЕРШИЙ РЯДОК ВИРІШУЄ ВСЕ:
+- Перше речення має ЗУПИНИТИ гортання. Якщо воно нудне, пост не побачать.
+- Робочі гачки: смілива думка ("Найкраща ковбаса та, що з дитинства, і крапка"), несподіване зізнання ("Їм сир прямо з холодильника вночі і не соромлюсь"), легка провокація ("Докторська переоцінена, скажіть я не правий"), впізнавана побутова сценка.
+- НЕ починай з "Сьогодні", "Ось", "Хочу розказати". Одразу в суть.
+
+ГОЛОВНИЙ ДВИГУН, ЦЕ КОМЕНТАРІ:
+- Алгоритм цінує коментарі й репости набагато вище за лайки. Пост має ПРОВОКУВАТИ відповідь.
+- Найсильніше працює думка, з якою можна не погодитись, або вибір "або/або". Незгода теж коментар.
+- Закінчуй КОНКРЕТНИМ питанням на нашу тему, на яке легко й хочеться відповісти. Не абстрактне "а ви як?", а предметне: "докторська чи краківська?", "сир з пліснявою це смачно чи ні?".
+
+ЧОГО НЕ РОБИТИ (це вбиває охоплення):
+- НЕ клянчити реакції: жодних "лайкни якщо згоден", "став +", "репост". Алгоритм за це карає.
+- НЕ реклама, не прес-реліз, не "у нас найкраще". Тон живої людини, а не бренду.
+- НЕ посилання в тексті посту (крім окремих брендових постів).
+- НЕ загальні мотиваційні фрази й банальні питання, їх гортають повз.
+
+ФОРМАТ:
+- Коротко, до 2 речень. Короткі рядки зупиняють краще за абзаци.
+- Тримайся однієї теми (їжа, ковбаса, сир, молочка), стабільність теми будує охоплення."""
+
 REPLY_SYSTEM = """Ти AI-помічник акаунту "Ділова Ковбаса" у Threads.
 Компанія: постачальник м'ясних виробів від 50+ українських виробників.
 
@@ -71,47 +128,50 @@ FALLBACK_POST_SYSTEM = """Напиши короткий пост для Threads 
 
 Повертай ТІЛЬКИ текст посту."""
 
-DAILY_POST_SYSTEM = """Ти ведеш Threads-сторінку про м'ясні вироби. Пишеш як людина, яка любить і розуміється на ковбасі.
+DAILY_POST_SYSTEM = """Ти ведеш Threads-сторінку про м'ясні вироби. Пишеш як жива людина, не як бренд.
 
-Твої читачі: звичайні люди, які купують ковбасу в магазині. Пишеш для них, а не для продавців чи підприємців.
+Мета посту — РОЗМОВА. Щоб людям захотілося відповісти в коментарях. Це не реклама і не факти про продукт.
+
+НАЙГОЛОВНІШЕ, ДОВЖИНА:
+- Коротко. 1-2 речення, не більше. Часто достатньо одного речення плюс питання.
+- Довгі пости НЕ читають. Якщо можна сказати коротше, скажи коротше.
+
+ПРО ЩО ПИСАТИ:
+- Прості, життєві, суспільно близькі теми до яких легко долучитися
+- Наприклад: як минули вихідні, що їли на сніданок, улюблена ковбаса з дитинства, що беруть на пікнік, ранок понеділка, перекус на роботі
+- Ковбаса чи їжа це лише привід для теплої розмови, а не предмет реклами
 
 ПРАВИЛА:
-- 1-3 речення, потім питання до читача
-- Особистий, живий тон. Як у коментарях, а не корпоративний пост
-- Питання особисте: "Яку б ти обрав?", "Що смакує більше?", а не про бізнес чи торгівлю
+- Закінчуй простим питанням, на яке хочеться відповісти
+- Питання легке й особисте: "А ви як?", "Яку любите?", "Як минули вихідні?"
+- Живий, теплий тон, як повідомлення другу
 - Без хештегів, без емодзі
-- Мова: тільки українська
-- ЗАБОРОНЕНО символ "—" (довге тире). Тільки кома, двокрапка або крапка з новим реченням
-- Іноді можна згадати dilovakovbasa.ua, але рідко
+- Мова: тільки українська, літературна, без суржику (не "муж" а "чоловік", не "вкусно" а "смачно")
+- ЗАБОРОНЕНО символ "—" (довге тире). Тільки кома або крапка
+- ЗАБОРОНЕНО: магазини, полиці, асортимент, постачальники, підприємці, B2B, ціни, знижки, реклама
 
-ЗАБОРОНЕНО писати про: магазини, полиці, асортимент, обіг, постачальників, підприємців, B2B, "ваш магазин", "ваша точка", "ваші клієнти"
-
-Приклади правильних постів:
-"Хто бачив життя, той знає: найсмачніший бутерброд з ковбасою їдять не на тарілці, а стоячи біля холодильника о 23:00."
-"Сирокопчена чи варена: є ті, хто їсть тільки одне і принципово не переходить. Ти на якій стороні?"
-"Літо починається не з першого дня, а з першого шашлику. Яку ковбасу берете на мангал?"
-"В Україні є виробники, чия краківська реально відрізняється від решти. Хто ваш фаворит?"
-
-ТЕМИ (не повторюй нещодавні):
-- Особисте спостереження про ковбасу як їжу
-- Порівняння смаків: яку і коли їдять
-- Сезон: що смачніше влітку або взимку
-- Факт про виробництво або склад, поданий як цікавинка
-- Гумор або побутова ситуація з ковбасою
-- Питання про улюблений вид або виробника"""
+Приклади (саме такий тон і довжина):
+"Як минули вихідні? У нас все по класиці: мангал, друзі і запах ковбасок на весь двір."
+"Зізнайтеся, яку ковбасу любите найбільше? Я б за докторською без черги стояв."
+"Понеділок. Хтось вже думає, що покласти в бутерброд на роботу?"
+"Бутерброд з ковбасою на ніч, коли ніхто не бачить. Хто ще так робить?"
+"Яка їжа у вас асоціюється з дитинством?\""""
 
 
 class AIHandler:
     def __init__(self, api_key: str):
         self.client = anthropic.Anthropic(api_key=api_key)
 
-    def generate_reply(self, post_text: str) -> str | None:
+    def generate_reply(self, post_text: str, recent_context: str = "") -> str | None:
+        content = f"Пост: {post_text}"
+        if recent_context:
+            content = f"{recent_context}\n\n{content}"
         try:
             msg = self.client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=150,
                 system=REPLY_SYSTEM,
-                messages=[{"role": "user", "content": f"Пост: {post_text}"}],
+                messages=[{"role": "user", "content": content}],
             )
             response = msg.content[0].text.strip()
             if response == "NULL" or not response:
@@ -121,11 +181,13 @@ class AIHandler:
             log.error(f"AI reply error: {e}")
             return None
 
-    def generate_own_post_reply(self, comment_text: str, username: str, original_post_text: str | None = None) -> str | None:
+    def generate_own_post_reply(self, comment_text: str, username: str, original_post_text: str | None = None, recent_context: str = "") -> str | None:
         context = ""
         if original_post_text:
             context = f"Наш пост: {original_post_text}\n\n"
         content = f"{context}Коментар від @{username}: {comment_text}"
+        if recent_context:
+            content = f"{recent_context}\n\n{content}"
         try:
             msg = self.client.messages.create(
                 model="claude-sonnet-4-6",
@@ -159,9 +221,9 @@ class AIHandler:
         if not parts:
             return None
 
-        content = " ".join(parts) + " Сайт: dilovakovbasa.ua"
+        content = " ".join(parts)
         system = """Ти ведеш Threads-сторінку "Ділова Ковбаса". Тобі дають список нових товарів або акцій з сайту.
-Напиши короткий живий пост: що з'явилося або що зараз зі знижкою, і запрошуй на сайт.
+Напиши короткий живий пост: що з'явилося або що зараз зі знижкою.
 
 ПРАВИЛА:
 - 2-3 речення, живий тон
@@ -169,16 +231,18 @@ class AIHandler:
 - ЗАБОРОНЕНО символ "—" (довге тире)
 - Без хештегів, без емодзі
 - Мова: тільки українська
-- В кінці: dilovakovbasa.ua"""
+- ЗАБОРОНЕНО будь-які посилання, URL, домени (dilovakovbasa.ua, dilovakovbasa.com тощо). Посилання є на сторінці профілю — в пості його не треба."""
 
         try:
             msg = self.client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=200,
+                max_tokens=400,
                 system=system,
                 messages=[{"role": "user", "content": content}],
             )
-            return self._strip_emdash(msg.content[0].text.strip())
+            result = self._strip_emdash(msg.content[0].text.strip())
+            result = AIHandler._strip_urls(result)
+            return result
         except Exception as e:
             log.error(f"AI catalog post error: {e}")
             return None
@@ -230,6 +294,19 @@ class AIHandler:
         text = re.sub(r",\s*,", ",", text)
         return text.strip(", ")
 
+    @staticmethod
+    def _strip_urls(text: str) -> str:
+        """Remove any URLs or bare domains the AI accidentally included."""
+        import re
+        # Remove http(s):// URLs
+        text = re.sub(r"https?://\S+", "", text)
+        # Remove bare domains like dilovakovbasa.ua or dilovakovbasa.com
+        text = re.sub(r"\b[\w-]+\.(ua|com|net|org|info)\b", "", text)
+        # Clean up leftover punctuation/spaces
+        text = re.sub(r"\s{2,}", " ", text)
+        text = re.sub(r"[\s:,]+$", "", text)
+        return text.strip()
+
     @classmethod
     def _is_b2b_mechanism(cls, mechanism: str) -> bool:
         low = mechanism.lower()
@@ -242,7 +319,7 @@ class AIHandler:
             return True
         return sum(1 for w in cls._B2B_POST_WORDS if w in low) >= 2
 
-    def generate_daily_post(self, insight: str | None = None, recent_posts: list[str] | None = None, trend_mechanism: str | None = None) -> str:
+    def generate_daily_post(self, insight: str | None = None, recent_posts: list[str] | None = None, trend_mechanism: str | None = None, recent_context: str = "") -> str:
         parts = ["Напиши новий пост про ковбасу або м'ясні вироби для звичайних людей."]
 
         if trend_mechanism and not self._is_b2b_mechanism(trend_mechanism):
@@ -258,6 +335,9 @@ class AIHandler:
             recent_block = "\n".join(f'- «{t[:200]}»' for t in recent_posts[:7])
             parts.append(f"\nНещодавно вже публікували (ці теми не повторювати):\n{recent_block}")
 
+        if recent_context:
+            parts.append(f"\n{recent_context}")
+
         if insight:
             parts.append(f"\nПатерни що не працюють в наших постах (уникай цього):\n{insight}")
 
@@ -266,8 +346,8 @@ class AIHandler:
         try:
             msg = self.client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=200,
-                system=DAILY_POST_SYSTEM + "\n\nВАЖЛИВО: повертай ТІЛЬКИ текст посту. Без заголовків, без варіантів, без markdown. Символ — (довге тире) ЗАБОРОНЕНИЙ — замінюй на кому або крапку.",
+                max_tokens=120,
+                system=DAILY_POST_SYSTEM + "\n\n" + VIRAL_RULES + "\n\nВАЖЛИВО: повертай ТІЛЬКИ текст посту, коротко. Без заголовків, без варіантів, без markdown. Символ довге тире ЗАБОРОНЕНИЙ, замінюй на кому або крапку.",
                 messages=[{"role": "user", "content": content}],
             )
             result = self._strip_emdash(msg.content[0].text.strip())
@@ -285,4 +365,170 @@ class AIHandler:
             return result
         except Exception as e:
             log.error(f"AI daily post error: {e}")
-            return "Ділова Ковбаса: 950+ м'ясних виробів від українських виробників. Доставка по всій Україні. https://www.dilovakovbasa.ua"
+            raise AIGenerationError(str(e)) from e
+
+    def generate_site_post(self) -> str:
+        """A branded reminder post that INCLUDES the site link (renders a preview card).
+        Used once every few days. Unlike consumer posts, the link is kept, not stripped."""
+        system = """Ти ведеш Threads-сторінку "Ділова Ковбаса" — сервіс замовлення продуктів онлайн (понад 950 позицій від 50+ виробників, доставка по всій Україні).
+
+ВАЖЛИВО про асортимент: це вже НЕ лише ковбаса. Крім м'ясного є великий вибір сирів (тверді, вершкові, моцарела, з пліснявою, плавлені) і молочки (молоко, вершки, масло, сметана, йогурти), а також ікра та бакалія. Не звужуй до самої ковбаси.
+
+Раз на кілька днів треба тепло нагадати людям про сам сайт. Напиши короткий пост-нагадування.
+
+ПРАВИЛА:
+- 1-2 речення, по-людськи і тепло, не як рекламний банер
+- Згадай, що вибір широкий: не тільки ковбаса й м'ясне, а й сири та молочка. Можна назвати 2-3 напрями, а не лише ковбасу
+- Можна легке запрошення або питання
+- Без емодзі, без хештегів
+- ЗАБОРОНЕНО символ довге тире, тільки кома або крапка
+- Мова: тільки українська
+- НЕ вставляй посилання в текст, його додамо окремо
+
+Повертай ТІЛЬКИ текст посту."""
+        try:
+            msg = self.client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=150,
+                system=system,
+                messages=[{"role": "user", "content": "Напиши пост-нагадування про сайт."}],
+            )
+            text = self._strip_emdash(msg.content[0].text.strip())
+        except Exception as e:
+            log.error(f"AI site post error: {e}")
+            raise AIGenerationError(str(e)) from e
+
+        # Always append the site link so Threads renders the preview card
+        return f"{text} dilovakovbasa.ua"
+
+    def generate_b2b_post(self) -> str:
+        """Lead-gen post addressed to business owners (pizzerias, cafés, bars, HoReCa),
+        asking where they source their meat/cheese products — to spark replies and DMs.
+        Intentionally B2B, so it does NOT go through the consumer _is_b2b_post guard."""
+        system = """Ти ведеш Threads-сторінку "Ділова Ковбаса" — постачальник м'ясних виробів для бізнесу (піцерії, кав'ярні, бари, ресторани, HoReCa).
+
+Треба опублікувати пост, звернений до ВЛАСНИКІВ ЗАКЛАДІВ, щоб залучити їх до розмови і щоб вони написали нам у коментарі чи в дірект. Мета, дізнатися де вони закуповують продукти і зав'язати контакт.
+
+ПРО ЩО МОЖНА ПИТАТИ (обери одне, не все одразу):
+- Де закуповують сир, ковбасу, сосиски, м'ясні вироби для закладу
+- Де беруть сир і молочку (масло, вершки, сметану) для кухні
+- Що для них головне у постачальнику: ціна, якість, стабільність чи доставка
+- Чи підводить їх постачальник, зриви поставок, якість що плаває
+
+Чергуй фокус: не завжди про м'ясне. Сир і молочка для закладів так само болюча тема, іноді став питання саме про них.
+
+ГАЧОК: перше речення має зачепити саме власника закладу, як колега, що розуміє біль. Не загальне вступне слово, одразу по суті, щоб хотілося відповісти в коментарях. Незгода чи власна історія від власника, теж коментар, а коментарі це головний сигнал охоплення.
+
+ПРАВИЛА:
+- Звертайся прямо до власників: "Власники піцерій, кав'ярень і барів...", "Ресторатори...", "Власники закладів..."
+- 1-2 речення, живо, як колега до колеги
+- ГОЛОВНЕ, це щире ПИТАННЯ на яке хочеться відповісти в коментарях
+- Без реклами себе, без "у нас найкраще", без посилань. Просто питання
+- Без емодзі, без хештегів
+- ЗАБОРОНЕНО символ довге тире, тільки кома або крапка
+- Мова: тільки українська
+
+Приклади потрібного тону:
+"Власники піцерій, кав'ярень і барів, розкажіть, де ви зараз закуповуєте сир та ковбаси для закладу?"
+"Ресторатори, а де берете сир і масло на кухню, свій постачальник тримає якість стабільно?"
+"Власники закладів, часто вас підводить постачальник ковбас і сирів? Цікаво, як ви вирішуєте це питання."
+
+Повертай ТІЛЬКИ текст посту."""
+        try:
+            msg = self.client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=150,
+                system=system,
+                messages=[{"role": "user", "content": "Напиши пост-питання до власників закладів."}],
+            )
+            return self._strip_emdash(msg.content[0].text.strip())
+        except Exception as e:
+            log.error(f"AI b2b post error: {e}")
+            raise AIGenerationError(str(e)) from e
+
+    def generate_post_from_feed(self, examples: list[dict], recent_posts: list[str] | None = None, recent_context: str = "") -> str | None:
+        """Given REAL popular Threads posts on food topics (read from the public feed),
+        figure out WHY they work (hook, format, emotion) and write OUR OWN short post
+        in the same spirit on our topic (meat, cheese, dairy, food). Never copies them.
+        Returns None on failure so the caller can fall back to normal generation."""
+        if not examples:
+            return None
+
+        # Shuffle before showing so the model isn't anchored to the single top example
+        # every run (that caused near-paraphrases of the most-liked post).
+        import random
+        pool = list(examples)
+        random.shuffle(pool)
+        lines = []
+        for ex in pool[:6]:
+            txt = (ex.get("text") or "").replace("\n", " ").strip()
+            if txt:
+                lines.append(f'- [{ex.get("likes", 0)} лайків] «{txt[:220]}»')
+        if not lines:
+            return None
+        examples_block = "\n".join(lines)
+
+        system = f"""Ти ведеш Threads-сторінку про їжу від імені "Ділова Ковбаса". Пишеш як жива людина, не як бренд.
+
+{ASSORTMENT_SUMMARY}
+
+{VIRAL_RULES}
+
+Тобі дають РЕАЛЬНІ популярні пости з Threads на харчову тему за сьогодні. Твоє завдання:
+1. Зрозуміти, ЧОМУ вони популярні: який ТИП гачка, формат, емоція (впізнаваність, гумор, ностальгія, несподіваний кут, побутова сценка, зізнання, легка провокація). Дивись і на кількість лайків біля прикладів: що більше лайків, то сильніший прийом, але копіювати сюжет заборонено.
+2. Написати НАШ ВЛАСНИЙ короткий пост у тому ж дусі, але на нашу тему, за правилами вище.
+
+СУВОРО ПРО ОРИГІНАЛЬНІСТЬ:
+- НЕ переказуй сюжет жодного прикладу. Заборонено та сама сцена, місце, репліка чи ситуація (маршрутка, крик на зупинці, конкретний діалог тощо).
+- Заборонено красти характерні слівця й панчлайни з прикладів (напр. "хазяйновита"). Свої слова, своя думка.
+- Приклади потрібні ЛИШЕ щоб зрозуміти ТИП прийому, а не щоб їх переписати іншими словами.
+- Придумай зовсім іншу, свою повсякденну ситуацію. Це має бути повністю оригінальний пост.
+- Не чіпляйся за один найяскравіший приклад, дивись на всі як на набір прийомів.
+
+ТЕМА (продукт має бути в кадрі):
+- У пості має фігурувати НАШ продукт: ковбаса, сир, молочка (сметана, масло, йогурт, вершки, кефір), м'ясне, або звичайний сніданок/перекус із ними.
+- НЕ пиши про страви, яких ми не продаємо (тірамісу, торти, суші тощо), навіть якщо там є вершки. Герой посту, наш продукт.
+- Чергуй продукти між постами, не лише ковбаса. Сир і молочка це рівноправні теми.
+
+ДОВЖИНА, НАЙГОЛОВНІШЕ:
+- Максимум 2 короткі речення разом із питанням. Три речення це вже забагато, ріж.
+- Часто достатньо одного речення плюс коротке питання.
+
+РІЗНОМАНІТТЯ (важливо, пости йдуть щодня):
+- НЕ починай щоразу з "Зробила" чи "Перший раз". Варіюй перше слово й конструкцію.
+- Чергуй кут: то спостереження, то зізнання, то пряме питання, то смішна побутова деталь. Не одна й та сама формула.
+
+ПРАВИЛА:
+- Живий, теплий, розмовний тон, як повідомлення другу
+- Майже завжди закінчуй простим питанням, на яке легко й хочеться відповісти (це головний двигун коментарів). Дотепним твердженням без питання можна лише зрідка, не підряд.
+- Без хештегів, без емодзі
+- Мова: тільки українська, літературна, БЕЗ суржику (не "муж" а "чоловік", не "вкусно" а "смачно", не "получається" а "виходить")
+- ЗАБОРОНЕНО символ "—" (довге тире). Тільки кома або крапка
+- ЗАБОРОНЕНО: реклама, ціни, знижки, "у нас є", посилання, магазини, асортимент, B2B, підприємці
+
+Повертай ТІЛЬКИ текст посту, без пояснень і без варіантів."""
+
+        parts = [f"Популярні пости Threads сьогодні:\n{examples_block}"]
+        if recent_posts:
+            recent_block = "\n".join(f'- «{t[:150]}»' for t in recent_posts[:7])
+            parts.append(f"\nМи нещодавно вже публікували (ці теми не повторюй):\n{recent_block}")
+        if recent_context:
+            parts.append(f"\n{recent_context}")
+
+        try:
+            msg = self.client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=150,
+                system=system,
+                messages=[{"role": "user", "content": "\n".join(parts)}],
+            )
+            result = self._strip_emdash(msg.content[0].text.strip())
+            result = AIHandler._strip_urls(result)
+
+            if not result or self._is_b2b_post(result):
+                log.warning(f"feed post rejected (empty/B2B), fallback: {result[:120]}")
+                return None
+            return result
+        except Exception as e:
+            log.error(f"AI feed post error: {e}")
+            return None

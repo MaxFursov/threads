@@ -28,6 +28,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS published_posts (
                 post_url TEXT PRIMARY KEY,
                 post_text TEXT,
+                thread_id TEXT DEFAULT NULL,
                 likes INTEGER DEFAULT NULL,
                 comments INTEGER DEFAULT NULL,
                 published_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -37,6 +38,12 @@ class Database:
                 key TEXT PRIMARY KEY,
                 value TEXT,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT,
+                summary TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
         """)
         self.conn.commit()
@@ -79,22 +86,23 @@ class Database:
         )
         self.conn.commit()
 
-    def save_published_post(self, url: str, text: str):
+    def save_published_post(self, url: str, text: str, thread_id: str | None = None):
         self.conn.execute(
-            "INSERT OR IGNORE INTO published_posts (post_url, post_text) VALUES (?, ?)",
-            (url, text),
+            "INSERT OR IGNORE INTO published_posts (post_url, post_text, thread_id) VALUES (?, ?, ?)",
+            (url, text, thread_id),
         )
         self.conn.commit()
 
     def get_posts_needing_metrics(self, max_count: int = 20) -> list[dict]:
         cur = self.conn.execute(
-            """SELECT post_url FROM published_posts
+            """SELECT post_url, thread_id FROM published_posts
                WHERE metrics_updated_at IS NULL
+               AND thread_id IS NOT NULL
                AND published_at > datetime('now', '-30 days')
                ORDER BY published_at DESC LIMIT ?""",
             (max_count,),
         )
-        return [{"url": row[0]} for row in cur.fetchall()]
+        return [{"url": row[0], "thread_id": row[1]} for row in cur.fetchall()]
 
     def update_post_metrics(self, url: str, likes: int, comments: int):
         self.conn.execute(
@@ -158,6 +166,17 @@ class Database:
         )
         self.conn.commit()
 
+    def get_recent_post_urls(self, days: int = 7) -> list[dict]:
+        """Return URLs of posts published in the last N days, newest first."""
+        cur = self.conn.execute(
+            """SELECT post_url FROM published_posts
+               WHERE published_at > datetime('now', ? || ' days')
+               AND post_url IS NOT NULL
+               ORDER BY published_at DESC LIMIT 10""",
+            (f"-{days}",),
+        )
+        return [{"url": row[0]} for row in cur.fetchall() if row[0]]
+
     def get_recent_post_texts(self, days: int = 14) -> list[str]:
         cur = self.conn.execute(
             """SELECT post_text FROM published_posts
@@ -173,6 +192,28 @@ class Database:
         )
         row = cur.fetchone()
         return row[0] if row else None
+
+    def log_activity(self, event_type: str, summary: str):
+        """Log a bot action. Keeps only the last 20 entries — never grows unboundedly."""
+        self.conn.execute(
+            "INSERT INTO activity_log (event_type, summary) VALUES (?, ?)",
+            (event_type, summary[:200]),
+        )
+        # Trim: keep only the newest 20 rows
+        self.conn.execute(
+            """DELETE FROM activity_log WHERE id NOT IN (
+                SELECT id FROM activity_log ORDER BY id DESC LIMIT 20
+            )"""
+        )
+        self.conn.commit()
+
+    def get_recent_activity(self, limit: int = 20) -> list[dict]:
+        """Return the last N activity entries, newest first."""
+        rows = self.conn.execute(
+            "SELECT event_type, summary, created_at FROM activity_log ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [{"type": r[0], "summary": r[1], "created_at": r[2]} for r in rows]
 
     def close(self):
         self.conn.close()
