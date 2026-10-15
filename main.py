@@ -490,18 +490,18 @@ async def main():
     # commenters get an answer inside that window (extends the evaluation window).
     scheduler.add_job(scan_own_post_comments, "cron", hour=9, minute=25, id="scan_post_comments_fast1")
     scheduler.add_job(scan_own_post_comments, "cron", hour=9, minute=55, id="scan_post_comments_fast2")
-    # Reply to OTHER people's relevant posts, logged-in (unofficial). Tiny volume on
-    # purpose: twice a day only, to limit ban risk (see feed_replier.py safety note).
-    scheduler.add_job(reply_to_feed_post, "cron", hour=10, minute=0, id="reply_feed_morning")
-    scheduler.add_job(reply_to_feed_post, "cron", hour=19, minute=0, id="reply_feed_evening")
+    # Replies to OTHER people's posts (reply_to_feed_post, unofficial logged-in session)
+    # are DISABLED at the owner's request (2026-10-15): only our own posts and the
+    # comments under them. To re-enable, add back two cron jobs (10:00 and 19:00) and
+    # provide THREADS_SESSION_JSON (see feed_replier.py).
     scheduler.add_job(collect_post_metrics, "cron", hour=22, minute=0, id="metrics")
     # Threads token lives 60 days and can only be refreshed while valid: renew weekly.
     scheduler.add_job(refresh_threads_token, "cron", day_of_week="sun", hour=12, minute=0, id="refresh_token")
     scheduler.start()
     log.info(
         "Scheduler started (official Threads API): "
-        "daily post 09:00, conversation scan+reply every 2h (8-20), metrics 22:00. "
-        "Replies to other posts (unofficial, logged-in session): 10:00 and 19:00."
+        "daily post 09:00, conversation scan+reply every 2h (8-20), metrics 22:00, "
+        "token refresh weekly. Replies to other people's posts: disabled."
     )
 
     while True:
